@@ -67,6 +67,15 @@ async function checkWhitelistAndLimit(phoneNumber, durationSeconds = 0) {
   };
 }
 
+app.listen(PORT, () => {
+  console.log(`Webhook-palvelin käynnissä portissa ${PORT}`);
+});
+
+app.post("/", async (req, res) => {
+  console.log("Saatiin POST-pyyntö");
+  // Käsittelykoodi
+});
+
 app.post("/", async (req, res) => {
   const phone = req.body.phone_number;
   const estimatedDuration = Number(req.body.durationSeconds || 0); // jos halutaan arvio
