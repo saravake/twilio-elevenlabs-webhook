@@ -12,7 +12,7 @@ function normalizeNumber(number) {
   return number.replace(/\D/g, "").slice(-9); // 9 viimeistä numeroa
 }
 
-async function checkWhitelistAndLimit(phoneNumber) {
+async function checkWhitelistAndLimit(phoneNumber, durationSeconds = 0) {
   const auth = new google.auth.GoogleAuth({
     credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -49,6 +49,16 @@ async function checkWhitelistAndLimit(phoneNumber) {
     return { allow_call: false, message: "Päivittäinen 5 minuutin raja on täyttynyt." };
   }
 
+  // Logita arvioitu kesto (esim. 0 sekuntia tarkistuksessa)
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: 'log!A2',
+    valueInputOption: 'RAW',
+    requestBody: {
+      values: [[today, phoneNumber, durationSeconds]],
+    },
+  });
+
   return {
     allow_call: true,
     session_labels: {
@@ -59,10 +69,12 @@ async function checkWhitelistAndLimit(phoneNumber) {
 
 app.post("/", async (req, res) => {
   const phone = req.body.phone_number;
+  const estimatedDuration = Number(req.body.durationSeconds || 0); // jos halutaan arvio
+
   if (!phone) return res.status(400).json({ allow_call: false, message: "Ei numeroa" });
 
   try {
-    const result = await checkWhitelistAndLimit(normalizeNumber(phone));
+    const result = await checkWhitelistAndLimit(normalizeNumber(phone), estimatedDuration);
     res.json(result);
   } catch (err) {
     console.error(err);
