@@ -1,4 +1,3 @@
-
 const express = require('express');
 const bodyParser = require('body-parser');
 const { google } = require('googleapis');
@@ -52,7 +51,6 @@ async function checkWhitelistAndLimit(phoneNumber) {
 
   return {
     allow_call: true,
-    agent_id: process.env.ELEVENLABS_AGENT_ID,
     session_labels: {
       jäljellä: (300 - secondsUsed) + " sekuntia"
     }
