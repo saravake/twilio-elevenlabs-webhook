@@ -1,74 +1,73 @@
-const express = require("express");
-const { GoogleSpreadsheet } = require("google-spreadsheet");
-const bodyParser = require("body-parser");
+const express = require('express');
+const { GoogleSpreadsheet } = require('google-spreadsheet');
+const bodyParser = require('body-parser');
 
 const app = express();
-app.use(bodyParser.json());
-
 const PORT = process.env.PORT || 10000;
 
-const SHEET_ID = process.env.SHEET_ID;
-const GOOGLE_SERVICE_ACCOUNT = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+app.use(bodyParser.json());
 
-app.post("/", async (req, res) => {
-  console.log("Webhook-pyyntö vastaanotettu");
+app.post('/', async (req, res) => {
+  console.log('Webhook-pyyntö vastaanotettu');
+  const callerId = req.body.caller_id;
 
-  const fromNumber = req.body?.phone_number;
-
-  if (!fromNumber) {
-    console.error("Virhe: Ei puhelinnumeroa");
-    return res.status(400).json({ error: "Ei puhelinnumeroa" });
+  if (!callerId) {
+    console.error('Virhe webhookissa: Ei puhelinnumeroa');
+    return res.status(400).json({ error: 'caller_id missing from request' });
   }
 
   try {
-    const doc = new GoogleSpreadsheet(SHEET_ID);
-    await doc.useServiceAccountAuth(GOOGLE_SERVICE_ACCOUNT);
+    const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+    const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
+    await doc.useServiceAccountAuth(serviceAccount);
     await doc.loadInfo();
 
-    const configSheet = doc.sheetsByTitle["config"];
-    const logSheet = doc.sheetsByTitle["log"];
+    const configSheet = doc.sheetsByTitle['config'];
+    const logSheet = doc.sheetsByTitle['log'];
 
     await configSheet.loadCells();
     await logSheet.loadCells();
 
-    const rows = await configSheet.getRows();
-    const whitelistRow = rows.find(r => normalizeNumber(r.phone) === normalizeNumber(fromNumber));
+    const configRows = await configSheet.getRows();
+    const whitelist = configRows.map(row => normalizePhoneNumber(row.phone));
 
-    const whitelisted = !!whitelistRow;
+    const normalizedCaller = normalizePhoneNumber(callerId);
+    const whitelisted = whitelist.includes(normalizedCaller);
 
+    const today = new Date().toISOString().slice(0, 10);
     const logRows = await logSheet.getRows();
-    const today = new Date().toISOString().split("T")[0];
 
-    let secondsUsedToday = 0;
-
-    for (let row of logRows) {
-      const logDate = row.date?.split("T")[0];
-      const logNumber = normalizeNumber(row.phone);
-      const seconds = parseInt(row.seconds) || 0;
-
-      if (logDate === today && logNumber === normalizeNumber(fromNumber)) {
-        secondsUsedToday += seconds;
+    let secondsUsed = 0;
+    for (const row of logRows) {
+      const rowDate = new Date(row.date).toISOString().slice(0, 10);
+      const rowPhone = normalizePhoneNumber(row.phone);
+      const rowSeconds = Number(row.seconds || 0);
+      if (rowDate === today && rowPhone === normalizedCaller) {
+        secondsUsed += rowSeconds;
       }
     }
 
-    const clientData = {
-      whitelisted,
-      seconds_used_today: secondsUsedToday,
-      max_seconds_per_day: 300,
-      customer_name: whitelistRow?.name || null,
-      memory_note: whitelistRow?.memory || null,
-    };
+    const maxSeconds = 300;
 
-    console.log("Palautetaan client_data:", clientData);
-    res.json(clientData);
+    console.log(`Palautetaan tiedot: whitelisted=${whitelisted}, käytetty=${secondsUsed}`);
+
+    return res.json({
+      whitelisted,
+      seconds_used_today: secondsUsed,
+      max_seconds_per_day: maxSeconds,
+    });
   } catch (error) {
-    console.error("Virhe webhookissa:", error);
-    res.status(500).json({ error: "Sisäinen virhe" });
+    console.error('Virhe webhookissa:', error);
+    return res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-function normalizeNumber(number) {
-  return number.replace(/\D/g, "").slice(-9); // 9 viimeistä numeroa
+function normalizePhoneNumber(number) {
+  number = number.toString().trim();
+  if (number.startsWith('+358')) return number;
+  if (number.startsWith('0')) return '+358' + number.slice(1);
+  if (number.startsWith('358')) return '+' + number;
+  return number.replace(/\D/g, ''); // fallback
 }
 
 app.listen(PORT, () => {
