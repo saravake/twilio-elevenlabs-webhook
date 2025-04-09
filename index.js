@@ -1,58 +1,76 @@
-const express = require('express');
-const { GoogleSpreadsheet } = require('google-spreadsheet');
+const express = require("express");
+const { GoogleSpreadsheet } = require("google-spreadsheet");
+const bodyParser = require("body-parser");
+
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
+
+const PORT = process.env.PORT || 10000;
 
 const SHEET_ID = process.env.SHEET_ID;
-const SERVICE_ACCOUNT = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+const GOOGLE_SERVICE_ACCOUNT = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
 
-// Yksinkertainen normalisointi suomalaisille numeroille
-function normalizePhone(phone) {
-  const digits = phone.replace(/\D/g, '');
-  return digits.slice(-9); // esim. 401234567
-}
+app.post("/", async (req, res) => {
+  console.log("Webhook-pyyntö vastaanotettu");
 
-app.post('/', async (req, res) => {
+  const fromNumber = req.body?.phone_number;
+
+  if (!fromNumber) {
+    console.error("Virhe: Ei puhelinnumeroa");
+    return res.status(400).json({ error: "Ei puhelinnumeroa" });
+  }
+
   try {
-    const rawPhone = req.body.phoneNumber || '';
-    const phone = normalizePhone(rawPhone);
-    const today = new Date().toISOString().split('T')[0];
-
     const doc = new GoogleSpreadsheet(SHEET_ID);
-    await doc.useServiceAccountAuth(SERVICE_ACCOUNT);
+    await doc.useServiceAccountAuth(GOOGLE_SERVICE_ACCOUNT);
     await doc.loadInfo();
 
-    const whitelistSheet = doc.sheetsByTitle['whitelist'];
-    const logSheet = doc.sheetsByTitle['log'];
+    const configSheet = doc.sheetsByTitle["config"];
+    const logSheet = doc.sheetsByTitle["log"];
 
-    const whitelistRows = await whitelistSheet.getRows();
-    const isWhitelisted = whitelistRows.some(
-      row => normalizePhone(row.phone) === phone
-    );
+    await configSheet.loadCells();
+    await logSheet.loadCells();
+
+    const rows = await configSheet.getRows();
+    const whitelistRow = rows.find(r => normalizeNumber(r.phone) === normalizeNumber(fromNumber));
+
+    const whitelisted = !!whitelistRow;
 
     const logRows = await logSheet.getRows();
-    const secondsUsedToday = logRows
-      .filter(row => normalizePhone(row.phone) === phone && row.date === today)
-      .reduce((sum, row) => sum + Number(row.duration || 0), 0);
+    const today = new Date().toISOString().split("T")[0];
+
+    let secondsUsedToday = 0;
+
+    for (let row of logRows) {
+      const logDate = row.date?.split("T")[0];
+      const logNumber = normalizeNumber(row.phone);
+      const seconds = parseInt(row.seconds) || 0;
+
+      if (logDate === today && logNumber === normalizeNumber(fromNumber)) {
+        secondsUsedToday += seconds;
+      }
+    }
 
     const clientData = {
-      whitelisted: isWhitelisted,
+      whitelisted,
       seconds_used_today: secondsUsedToday,
-      customer_name: "Asiakas",
-      memory_note: "Tykkää luonnosta ja mökkeilystä."
+      max_seconds_per_day: 300,
+      customer_name: whitelistRow?.name || null,
+      memory_note: whitelistRow?.memory || null,
     };
 
-    return res.json(clientData);
-  } catch (err) {
-    console.error('Virhe webhookissa:', err);
-    return res.status(200).json({
-      whitelisted: false,
-      seconds_used_today: 0,
-      error: true,
-      message: 'Tapahtui virhe tiedon haussa'
-    });
+    console.log("Palautetaan client_data:", clientData);
+    res.json(clientData);
+  } catch (error) {
+    console.error("Virhe webhookissa:", error);
+    res.status(500).json({ error: "Sisäinen virhe" });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Webhook toimii portissa ${PORT}`));
+function normalizeNumber(number) {
+  return number.replace(/\D/g, "").slice(-9); // 9 viimeistä numeroa
+}
+
+app.listen(PORT, () => {
+  console.log(`Webhook-palvelin käynnissä portissa ${PORT}`);
+});
