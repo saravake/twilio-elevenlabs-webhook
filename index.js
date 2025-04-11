@@ -3,18 +3,22 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const bodyParser = require('body-parser');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 8080;
 
 app.use(bodyParser.json());
 
 app.post('/', async (req, res) => {
   console.log('Webhook-pyyntö vastaanotettu');
-  const callerId = req.body.caller_id;
 
-  if (!callerId) {
+  const rawNumber = req.body?.caller_id;
+
+  if (!rawNumber) {
     console.error('Virhe webhookissa: Ei puhelinnumeroa');
     return res.status(400).json({ error: 'caller_id missing from request' });
   }
+
+  const normalizedCaller = normalizePhoneNumber(rawNumber);
+  console.log(`Saapuva numero: ${rawNumber}, normalisoitu: ${normalizedCaller}`);
 
   try {
     const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
@@ -25,13 +29,8 @@ app.post('/', async (req, res) => {
     const configSheet = doc.sheetsByTitle['config'];
     const logSheet = doc.sheetsByTitle['log'];
 
-    await configSheet.loadCells();
-    await logSheet.loadCells();
-
     const configRows = await configSheet.getRows();
     const whitelist = configRows.map(row => normalizePhoneNumber(row.phone));
-
-    const normalizedCaller = normalizePhoneNumber(callerId);
     const whitelisted = whitelist.includes(normalizedCaller);
 
     const today = new Date().toISOString().slice(0, 10);
@@ -56,6 +55,7 @@ app.post('/', async (req, res) => {
       seconds_used_today: secondsUsed,
       max_seconds_per_day: maxSeconds,
     });
+
   } catch (error) {
     console.error('Virhe webhookissa:', error);
     return res.status(500).json({ error: 'Internal Server Error' });
@@ -63,11 +63,7 @@ app.post('/', async (req, res) => {
 });
 
 function normalizePhoneNumber(number) {
-  number = number.toString().trim();
-  if (number.startsWith('+358')) return number;
-  if (number.startsWith('0')) return '+358' + number.slice(1);
-  if (number.startsWith('358')) return '+' + number;
-  return number.replace(/\D/g, ''); // fallback
+  return number.toString().replace(/\D/g, '').slice(-9); // 9 viimeistä numeroa
 }
 
 app.listen(PORT, () => {
