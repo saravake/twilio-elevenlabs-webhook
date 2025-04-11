@@ -1,70 +1,77 @@
 const express = require('express');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
-const bodyParser = require('body-parser');
+const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
 
-const app = express();
+const SHEET_ID = process.env.SHEET_ID;
 const PORT = process.env.PORT || 8080;
 
-app.use(bodyParser.json());
+const app = express();
+app.use(express.json());
+
+function normalizePhoneNumber(number) {
+  number = number.toString().trim();
+  return number.slice(-9);
+}
 
 app.post('/', async (req, res) => {
-  console.log('Webhook-pyyntö vastaanotettu');
-
-  const rawNumber = req.body?.caller_id;
-
-  if (!rawNumber) {
-    console.error('Virhe webhookissa: Ei puhelinnumeroa');
-    return res.status(400).json({ error: 'caller_id missing from request' });
-  }
-
-  const normalizedCaller = normalizePhoneNumber(rawNumber);
-  console.log(`Saapuva numero: ${rawNumber}, normalisoitu: ${normalizedCaller}`);
-
   try {
-    const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
-    const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
-    await doc.useServiceAccountAuth(serviceAccount);
+    const callerId =
+      req.body.phone_number ||
+      req.body.phoneNumber ||
+      req.body.caller_id ||
+      (req.body.client_data && req.body.client_data.phoneNumber);
+
+    if (!callerId) {
+      console.log('Ei puhelinnumeroa');
+      return res.status(400).json({ error: 'Ei puhelinnumeroa' });
+    }
+
+    const phone = normalizePhoneNumber(callerId);
+    console.log(`Webhook-pyyntö vastaanotettu numerolta: ${callerId} (normalisoitu: ${phone})`);
+
+    const doc = new GoogleSpreadsheet(SHEET_ID);
+    await doc.useServiceAccountAuth(creds);
     await doc.loadInfo();
 
     const configSheet = doc.sheetsByTitle['config'];
     const logSheet = doc.sheetsByTitle['log'];
-
     const configRows = await configSheet.getRows();
     const whitelist = configRows.map(row => normalizePhoneNumber(row.phone));
-    const whitelisted = whitelist.includes(normalizedCaller);
 
-    const today = new Date().toISOString().slice(0, 10);
+    const whitelisted = whitelist.includes(phone);
+    const maxSeconds = 300;
+
+    const today = new Date().toISOString().split('T')[0];
+    await logSheet.loadHeaderRow();
     const logRows = await logSheet.getRows();
 
     let secondsUsed = 0;
     for (const row of logRows) {
-      const rowDate = new Date(row.date).toISOString().slice(0, 10);
-      const rowPhone = normalizePhoneNumber(row.phone);
-      const rowSeconds = Number(row.seconds || 0);
-      if (rowDate === today && rowPhone === normalizedCaller) {
-        secondsUsed += rowSeconds;
+      const logDate = row.date;
+      const logPhone = normalizePhoneNumber(row.phone || '');
+      const seconds = parseInt(row.seconds) || 0;
+      if (logDate === today && logPhone === phone) {
+        secondsUsed += seconds;
       }
     }
 
-    const maxSeconds = 300;
-
-    console.log(`Palautetaan tiedot: whitelisted=${whitelisted}, käytetty=${secondsUsed}`);
-
-    return res.json({
+    const clientData = {
       whitelisted,
       seconds_used_today: secondsUsed,
       max_seconds_per_day: maxSeconds,
-    });
+      customer_name: 'Elmeri', // placeholder
+      memory_note: 'Muistiinpanoja aiemmista puheluista' // placeholder
+    };
 
-  } catch (error) {
-    console.error('Virhe webhookissa:', error);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    console.log('Palautetaan client_data:', clientData);
+
+    res.json({ client_data: clientData });
+
+  } catch (err) {
+    console.error('Virhe webhookissa:', err.message);
+    res.status(500).json({ error: 'Tapahtui virhe' });
   }
 });
-
-function normalizePhoneNumber(number) {
-  return number.toString().replace(/\D/g, '').slice(-9); // 9 viimeistä numeroa
-}
 
 app.listen(PORT, () => {
   console.log(`Webhook-palvelin käynnissä portissa ${PORT}`);
