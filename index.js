@@ -47,7 +47,7 @@ app.post('/', async (req, res) => {
     const maxSeconds = 300;
 
     const response = {
-      client_data: {
+      dynamic_variables: {
         whitelisted,
         seconds_used_today: secondsUsed,
         max_seconds_per_day: maxSeconds,
