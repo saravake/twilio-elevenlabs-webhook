@@ -1,82 +1,72 @@
 const express = require('express');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
-const bodyParser = require('body-parser');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-app.use(bodyParser.json());
+app.use(express.json());
 
 app.post('/', async (req, res) => {
   console.log('Webhook-pyyntö vastaanotettu');
-  
-  // Käytetään kenttää "caller_id", kuten dokumentaatiossa on mainittu
+
   const callerId = req.body?.caller_id;
   if (!callerId) {
-    console.error('Virhe webhookissa: Ei puhelinnumeroa');
-    return res.status(400).json({ error: 'caller_id puuttuu pyynnöstä' });
+    console.log('Ei caller_id kenttää!');
+    return res.status(400).json({ error: 'caller_id puuttuu' });
   }
-  
-  const phone = normalizePhoneNumber(callerId);
-  console.log(`Saapuva numero: ${callerId} -> normalisoitu: ${phone}`);
-  
+
+  const normalized = normalizePhoneNumber(callerId);
+  console.log(`Saapuva numero: ${callerId}, normalisoitu: ${normalized}`);
+
   try {
     const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
     const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
     await doc.useServiceAccountAuth(creds);
     await doc.loadInfo();
 
-    // Oletetaan, että Sheetsissä on kaksi välilehteä: 'config' ja 'log'
     const configSheet = doc.sheetsByTitle['config'];
     const logSheet = doc.sheetsByTitle['log'];
 
-    // Hae whitelistin tiedot; oletamme, että 'config'-välilehdellä sarakkeessa A on puhelinnumerot
     const configRows = await configSheet.getRows();
-    const whitelist = configRows.map(row => normalizePhoneNumber(row.phone));
-    const whitelisted = whitelist.includes(phone);
+    const whitelisted = configRows
+      .map(r => normalizePhoneNumber(r.phone))
+      .includes(normalized);
 
-    // Hae logitiedot; oletamme että 'log'-välilehdellä on sarakkeet: date, phone, seconds
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toISOString().slice(0, 10);
     const logRows = await logSheet.getRows();
+
     let secondsUsed = 0;
     for (const row of logRows) {
-      // Muutetaan päivämäärä ISO-muotoon (vain päivä)
-      const rowDate = new Date(row.date).toISOString().split('T')[0];
+      const rowDate = new Date(row.date).toISOString().slice(0, 10);
       const rowPhone = normalizePhoneNumber(row.phone);
-      const rowSeconds = Number(row.seconds || 0);
-      if (rowDate === today && rowPhone === phone) {
-        secondsUsed += rowSeconds;
+      if (rowDate === today && rowPhone === normalized) {
+        secondsUsed += Number(row.seconds || 0);
       }
     }
-    
-    const maxSeconds = 300;
-    
-    // Placeholder-arvot; nämä voidaan myöhemmin hakea dynaamisesti Sheetsistä, esim. 'name' ja 'memory'
-    const customerName = "Elmeri";
-    const memoryNote = "Viimeksi puhuttiin säästä.";
 
-    // Muodostetaan JSON-vastaus asiakkaalle kirjoitettuna client_data -avaimen alle
-    const responsePayload = {
+    const maxSeconds = 300;
+
+    const response = {
       client_data: {
         whitelisted,
         seconds_used_today: secondsUsed,
         max_seconds_per_day: maxSeconds,
-        customer_name: customerName,
-        memory_note: memoryNote
+        customer_name: "Elmeri", // placeholder, voi hakea sheetsistä
+        memory_note: "Muisti: viimeksi puhuttiin säästä." // voi hakea sheetsistä
       }
     };
 
-    console.log("Palautetaan client_data:", responsePayload);
-    return res.json(responsePayload);
-  } catch (error) {
-    console.error("Virhe webhookissa:", error);
-    return res.status(500).json({ error: "Internal Server Error" });
+    console.log('Palautetaan:', JSON.stringify(response, null, 2));
+    return res.json(response);
+
+  } catch (err) {
+    console.error('Virhe webhookissa:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
 function normalizePhoneNumber(number) {
-  // Poistaa kaikki ei-numerot ja palauttaa viimeiset 9 numeroa
-  return number.toString().replace(/\D/g, "").slice(-9);
+  return number.toString().replace(/\D/g, '').slice(-9);
 }
 
 app.listen(PORT, () => {
